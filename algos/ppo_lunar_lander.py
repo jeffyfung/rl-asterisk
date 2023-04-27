@@ -17,8 +17,8 @@ device = (
 
 # wrapper class for processed Atari env
 class AtariEnv():
-    def __init__(self, env_name):
-        self.env = gym.make(env_name, render_mode="human")
+    def __init__(self, env_name, render_mode):
+        self.env = gym.make(env_name, render_mode=render_mode)
 
     def process(self, env_data):
         # TODO: preprocess the observation
@@ -45,8 +45,6 @@ class AtariEnv():
 
     def get_obs_dim(self):
         return self.env.observation_space.shape[0]
-        # return self.env.observation_space.shape
-        # return (self.target_height, self.target_width, 3)
 
 
 class Actor(nn.Module):
@@ -64,7 +62,6 @@ class Actor(nn.Module):
     # a forward pass to get softmax distribution, action
     def forward(self, obs):
         obs = obs.to(device)
-        # obs = torch.movedim(obs, 3, 1)
         logits = self.net(obs)
         policy = Categorical(logits=logits)
         action = policy.sample()
@@ -75,7 +72,7 @@ class Actor(nn.Module):
 
 
 class Critic(nn.Module):
-    def __init__(self, input_shape):
+    def __init__(self):
         super().__init__()
         act = nn.ReLU(True)
         layers = [
@@ -87,22 +84,14 @@ class Critic(nn.Module):
 
     def forward(self, obs):
         obs = obs.to(device)
-        # obs = torch.movedim(obs, 3, 1)
-        values = self.net(obs)
-        return values
+        return self.net(obs)
 
 
 # Heavily based on openai spinningup implementation
 class PPOBuffer():
-    # use a deque to manage the buffer?
-    # set a max size of butter
-    # what to store in the buffer?
-    # obvs (stacked?), action, reward,
 
-    # obs, act, ret, adv, logp
-    def __init__(self, buffer_size, obs_dim, num_action, gamma, lam):
+    def __init__(self, buffer_size, obs_dim, gamma, lam):
         self.obs_buf = np.zeros((buffer_size, obs_dim), dtype=np.float32)
-        # self.act_buf = np.zeros((buffer_size, num_action), dtype=np.float32)
         self.act_buf = np.zeros(buffer_size, dtype=np.float32)
         self.rew_buf = np.zeros(buffer_size, dtype=np.float32)
         # only for computing GAE
@@ -123,38 +112,6 @@ class PPOBuffer():
         self.val_buf[self.ptr] = val
         self.logp_buf[self.ptr] = logp
         self.ptr += 1
-
-    # def finish_path(self, last_val=0):
-    #     """
-    #     Call this at the end of a trajectory, or when one gets cut off
-    #     by an epoch ending. This looks back in the buffer to where the
-    #     trajectory started, and uses rewards and value estimates from
-    #     the whole trajectory to compute advantage estimates with GAE-Lambda,
-    #     as well as compute the rewards-to-go for each state, to use as
-    #     the targets for the value function.
-
-    #     The "last_val" argument should be 0 if the trajectory ended
-    #     because the agent reached a terminal state (died), and otherwise
-    #     should be V(s_T), the value function estimated for the last state.
-    #     This allows us to bootstrap the reward-to-go calculation to account
-    #     for timesteps beyond the arbitrary episode horizon (or epoch cutoff).
-    #     """
-
-    #     path_slice = slice(self.epi_start_index, self.ptr)
-    #     rews = np.append(self.rew_buf[path_slice], last_val)
-    #     vals = np.append(self.val_buf[path_slice], last_val)
-
-    #     # the next two lines implement GAE-Lambda advantage calculation
-    #     # https://arxiv.org/pdf/1506.02438.pdf
-    #     deltas = rews[:-1] + self.gamma * vals[1:] - vals[:-1]
-    #     self.adv_buf[path_slice] = utils.discount_cumsum(
-    #         deltas, self.gamma * self.lam)
-
-    #     # the next line computes rewards-to-go, to be targets for the value function
-    #     # what is the reward-to-go if the epoch is cut off?
-    #     self.ret_buf[path_slice] = utils.discount_cumsum(rews, self.gamma)[:-1]
-
-    #     self.path_start_idx = self.ptr
 
     def finish_path(self, last_val):
         path_slice = slice(self.epi_start_index, self.ptr)
@@ -183,19 +140,17 @@ class PPOBuffer():
             logp=torch.as_tensor(self.logp_buf, dtype=torch.float32)
         )
 
-    # reset the buffer
-    # called after each epoch
-    # move the ptr to the beginning of the buffer
+    # called at the end of each epoch
     def reset(self):
         self.ptr = 0
         self.epi_start_index = 0
 
 
 class AtariPPO():
-    def __init__(self, num_steps=4000, num_epochs=120, gamma=0.99, clip_ratio=0.2,
+    def __init__(self, num_steps=5000, num_epochs=100, gamma=0.99, clip_ratio=0.2,
                  actor_lr=0.005, critic_lr=0.005, training_iter=15,
-                 lam=0.97, max_epi_len=500, target_kl=0.01, seed=1):
-        self.env = AtariEnv("LunarLander-v2")
+                 lam=0.97, max_epi_len=1500, target_kl=0.01, seed=1, render_mode=None):
+        self.env = AtariEnv("LunarLander-v2", render_mode)
         self.num_steps = num_steps
         self.num_epochs = num_epochs
         self.clip_ratio = clip_ratio
@@ -213,10 +168,10 @@ class AtariPPO():
         num_action = self.env.get_num_action()
         obs_shape = self.env.get_obs_dim()
         self.actor = Actor(obs_shape, num_action).to(device)
-        self.critic = Critic(obs_shape).to(device)
+        self.critic = Critic().to(device)
 
         # init buffer
-        self.buffer = PPOBuffer(num_steps, obs_shape, num_action, gamma, lam)
+        self.buffer = PPOBuffer(num_steps, obs_shape, gamma, lam)
 
     def get_policy_loss(self, data):
         log_prob_old, obs, act, adv = data["logp"], data["obs"], data["act"], data["adv"]
@@ -263,7 +218,6 @@ class AtariPPO():
         rtn, obs = data["ret"], data["obs"]
         rtn = rtn.to(device)
 
-        # alternative: huber loss
         loss_func = nn.HuberLoss()
         # loss_func = nn.MSELoss()
         return loss_func(self.critic(obs).squeeze(1), rtn)
@@ -278,9 +232,6 @@ class AtariPPO():
         cum_rews = []
 
         for step in range(self.num_steps):
-            # may need to get logp to calculate loss
-            # val = self.critic(obs.unsqueeze(0))
-            # pi, act = self.actor(obs.unsqueeze(0))
             val = self.critic(obs)
             pi, act = self.actor(obs)
             logp = self.actor.get_log_likelihood(pi, act)
@@ -293,7 +244,6 @@ class AtariPPO():
 
             ep_len += 1
 
-            # double check the arguments
             self.buffer.store_step(obs, act.item(), rew,
                                    val.item(), logp.item())
 
@@ -363,7 +313,8 @@ class AtariPPO():
 
 def main():
     algo = AtariPPO()
-    algo.train("2023-04-26 20:19-40")
+    # algo.train("2023-04-26 21:54-115")
+    algo.train()
 
 
 main()
