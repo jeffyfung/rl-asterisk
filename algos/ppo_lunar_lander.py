@@ -148,7 +148,7 @@ class PPOBuffer():
 
 class AtariPPO():
     def __init__(self, num_steps=5000, num_epochs=100, gamma=0.99, clip_ratio=0.2,
-                 actor_lr=0.005, critic_lr=0.005, training_iter=15,
+                 actor_lr=2.5e-4, critic_lr=2.5e-4, training_iter=15,
                  lam=0.97, max_epi_len=1500, target_kl=0.01, seed=1, render_mode=None):
         self.env = AtariEnv("LunarLander-v2", render_mode)
         self.num_steps = num_steps
@@ -260,6 +260,7 @@ class AtariPPO():
                     ep_len = 0
                     ep += 1
                 self.buffer.finish_path(final_state_v)
+                print(f"reward for this episode: {total_rew}")
                 cum_rews.append(total_rew)
                 total_rew = 0
             else:
@@ -313,7 +314,6 @@ class AtariPPO():
 
 def main():
     algo = AtariPPO()
-    # algo.train("2023-04-26 21:54-115")
     algo.train()
 
 
