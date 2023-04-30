@@ -330,6 +330,3 @@ if __name__ == "__main__":
     plt.xlabel("Epoch")
     plt.ylabel("Average Episode Return (excl. cut-off tracjectories)")
     plt.show()
-
-    # TODO: add plotting function
-    # TODO: add model saving

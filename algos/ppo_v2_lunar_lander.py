@@ -54,7 +54,6 @@ def make_env(env_id, run_name, idx, record_video):
         env = gym.wrappers.RecordEpisodeStatistics(env)
         if record_video and idx == 0:
             env = gym.wrappers.RecordVideo(env, f"videos/{run_name}", episode_trigger=lambda x: x % 20 == 0, disable_logger=True)
-        # env.seed(seed)
         # env.action_space.seed(seed)
         # env.observation_space.seed(seed)
         return env
@@ -90,24 +89,29 @@ class Agent(nn.Module):
         super(Agent, self).__init__()
         # act = nn.Tanh()
 
+        # can change the layer init std to 0.01
         critic_layers = [
-            layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, 1), 1.0)
+            layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 256)),
+            nn.ReLU(),
+            layer_init(nn.Linear(256, 256)),
+            nn.ReLU(),
+            layer_init(nn.Linear(256, 64)),
+            nn.ReLU(),
+            layer_init(nn.Linear(64, 1))
         ]
         self.critic = nn.Sequential(*critic_layers)
         print("Critic Network")
         print(self.critic)
 
         actor_layers = [
-            layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 64)),
-            nn.Tanh(),
-            layer_init(nn.Linear(64, 64)),
-            nn.Tanh(),
+            layer_init(nn.Linear(np.array(envs.single_observation_space.shape).prod(), 256)),
+            nn.ReLU(),
+            layer_init(nn.Linear(256, 256)),
+            nn.ReLU(),
+            layer_init(nn.Linear(256, 64)),
+            nn.ReLU(),
             # small gain (i.e. std) to ensure the output probability between actions are similar
-            layer_init(nn.Linear(64, envs.single_action_space.n), 0.01),
+            layer_init(nn.Linear(64, envs.single_action_space.n)),
         ]
         self.actor = nn.Sequential(*actor_layers)
         print("Actor Network")
@@ -185,7 +189,7 @@ if __name__ == "__main__":
     # global state init
     global_step = 0
     start_time = time.time()
-    next_obs, _ = envs.reset()
+    next_obs, _ = envs.reset(seed=args.seed)
     next_obs = torch.Tensor(next_obs).to(device)  # init obs?
     next_term = torch.zeros(args.num_envs).to(device)
     num_updates = args.total_timesteps // args.batch_size
@@ -226,7 +230,9 @@ if __name__ == "__main__":
                         epi_rtns.append(item['episode']['r'].item())
 
         # for plotting, only record actually terminated / truncated episodes (not cut-off episodes)
-        epoch_avg_rtns.append(sum(epi_rtns) / len(epi_rtns))
+        # for plotting, if a epoch contains no completed episode, copy last epoch's return
+        epoch_avg_rtn = sum(epi_rtns) / len(epi_rtns) if len(epi_rtns) > 0 else epoch_avg_rtns[-1]
+        epoch_avg_rtns.append(epoch_avg_rtn)
 
         with torch.no_grad():
             next_value = agent.get_value(next_obs).reshape(1, -1)
@@ -266,7 +272,6 @@ if __name__ == "__main__":
                 _, logp_new, entropy, value_new = agent.get_action_and_value(b_obs[mb_idx], b_act.long()[mb_idx])
                 log_ratio = logp_new - b_logp[mb_idx]
                 ratio = torch.exp(log_ratio)
-                # *** why is it not all ones??
 
                 with torch.no_grad():
                     # calculate approx_kl http://joschu.net/blog/kl-approx.html
@@ -302,7 +307,6 @@ if __name__ == "__main__":
 
                 entropy_loss = entropy.mean()
                 loss = pg_loss - args.ent_coef * entropy_loss + v_loss * args.vf_coef
-                print("total loss", loss)
 
                 optimizer.zero_grad()
                 loss.backward()
@@ -310,6 +314,7 @@ if __name__ == "__main__":
                 optimizer.step()
 
             # TODO: can also implement at minibatch level
+            # for some unknown reasons this is very rarely triggered?
             if args.target_kl is not None:
                 if approx_kl > args.target_kl:
                     print("early stopping")
