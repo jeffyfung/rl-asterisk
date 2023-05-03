@@ -11,10 +11,10 @@ import gymnasium as gym
 import time
 import matplotlib.pyplot as plt
 from utils.model_saver import ModelSaver
+from torch.optim.lr_scheduler import ExponentialLR, CosineAnnealingLR, LinearLR
 
 
 def parse_args():
-    # TODO: comment out unused args
     parser = argparse.ArgumentParser()
     parser.add_argument("--exp-name", type=str,
                         default=path.basename(__file__).rstrip(".py"))
@@ -262,7 +262,7 @@ class PPO():
 
             # bootstrap cut off episdoes
             with torch.no_grad():
-                bootstrapped_final_val = self.agent.compute_value(obs)
+                bootstrapped_final_val = self.agent.evaluate_critic(obs)
             self.buffer.compute_adv_and_rtn(
                 self.args.gamma, self.args.gae_lambda, bootstrapped_final_val, term)
 
@@ -333,6 +333,7 @@ class PPO():
         epoch_avg_rtns = []
         optimiser = optim.Adam(self.agent.parameters(),
                                lr=self.args.lr, eps=1e-5)
+        scheduler = LinearLR(optimiser, start_factor=0.15)
 
         for epoch in range(1, self.args.num_epoch + 1):
             last_epoch_final_obs = obs if epoch > 1 else None
@@ -340,12 +341,9 @@ class PPO():
             obs, term = collect_trajectories(
                 epoch, last_epoch_final_obs, last_epoch_final_term)
 
-            # TODO: schedulr or customized
-            if self.args.anneal_lr:
-                frac = 1 - (epoch - 1) / self.args.num_epoch
-                lr_ = frac * self.args.lr
-                optimiser.param_groups[0]["lr"] = lr_
             update(optimiser)
+
+            scheduler.step()
 
             if epoch % 20 == 1 or epoch == self.args.num_epoch:
                 self.model_saver.save(
