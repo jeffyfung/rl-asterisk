@@ -43,6 +43,7 @@ def parse_args():
     parser.add_argument("--target-kl", type=float, default=0.05)
 
     parser.add_argument("--load-model", type=str, default=None)
+    parser.add_argument("--num-agent", type=int, default=4)
 
     args = parser.parse_args()
     # i.e. batch step size (each epoch)
@@ -61,6 +62,12 @@ def make_env(env_id, run_name, idx, record_video):
                 env, f"videos/{run_name}", episode_trigger=lambda x: x % 20 == 0, disable_logger=True)
         return env
     return fn
+
+
+def export_data_to_csv(**kwargs):
+    for key, value in kwargs.items():
+        np.save(f"data/td_target_adv/{key}.npy", value)
+        torch.save(value, f"data/td_target_adv/{key}.pt")
 
 
 class Agent(nn.Module):
@@ -151,8 +158,8 @@ class SampleBuffer():
             next_step_val = final_val if s == self.buffer_width - 1 else self.val_buf[s + 1]
             next_step_term_mask = final_term if s == self.buffer_width - 1 else self.term_buf[s + 1]
             next_step_non_term_mask = 1.0 - next_step_term_mask
-            td_target = self.rew_buf[s] + gamma * next_step_val * next_step_non_term_mask
-            self.adv_buf[s] = td_target - self.val_buf[s]
+            td_residual = self.rew_buf[s] + gamma * next_step_val * next_step_non_term_mask
+            self.adv_buf[s] = td_residual - self.val_buf[s]
             next_step_rtn = final_val if s == self.buffer_width - 1 else self.rtn_buf[s + 1]
             self.rtn_buf[s] = self.rew_buf[s] + gamma * next_step_rtn * next_step_non_term_mask
 
@@ -231,11 +238,10 @@ class PPO():
 
     def train(self):
         def collect_trajectories(epoch, obs, term):
-            epi_rtns = []
+            epi_rtns, epi_lens = [], []
 
             if epoch == 1:
                 obs, _ = self.envs.reset()  # seed=self.args.seed
-                # torch.Tensor(obs).to(self.device)
                 obs = torch.tensor(obs).to(self.device)
                 term = torch.zeros(self.args.num_envs).to(self.device)
 
@@ -262,8 +268,7 @@ class PPO():
 
                 # rew_buf[step] = torch.Tensor(rew).to(device).view(-1)  # to confirm
                 obs = torch.tensor(obs_prime).to(self.device)
-                term = torch.tensor(np.logical_or(
-                    term_prime, trun), dtype=torch.float32).to(self.device)
+                term = torch.tensor(np.logical_or(term_prime, trun), dtype=torch.float32).to(self.device)
 
                 if "final_info" in info:
                     for item in info["final_info"]:
@@ -271,6 +276,7 @@ class PPO():
                             print(
                                 f"epoch={epoch}, global_step={global_step}, episodic_return={item['episode']['r'].item()}")
                             epi_rtns.append(item['episode']['r'].item())
+                            epi_lens.append(item['episode']['l'].item())
 
             # bootstrap cut off episdoes
             with torch.no_grad():
@@ -279,11 +285,10 @@ class PPO():
 
             # for plotting, only record actually terminated / truncated episodes (not cut-off episodes)
             # for plotting, if a epoch contains no completed episode, copy last epoch's return
-            epoch_avg_rtn = sum(
-                epi_rtns) / len(epi_rtns) if len(epi_rtns) > 0 else epoch_avg_rtns[-1]
-            epoch_avg_rtns.append(epoch_avg_rtn)
-
-            return obs, term
+            # epoch_avg_rtn = sum(
+            #     epi_rtns) / len(epi_rtns) if len(epi_rtns) > 0 else epoch_avg_rtns[-1]
+            # epoch_avg_rtns.append(epoch_avg_rtn)
+            return obs, term, epi_rtns, epi_lens
 
         def update(optimiser):
             # get everything from buffer
@@ -336,7 +341,8 @@ class PPO():
                         break
 
         global_step = 0
-        epoch_avg_rtns = []
+        epi_rtns_all, epi_lens_all, epoch_rtns, epoch_epi_lens = [], [], [], []
+
         optimiser = optim.Adam(self.agent.parameters(),
                                lr=self.args.lr, eps=1e-5)
         scheduler = LinearLR(optimiser, start_factor=0.15)
@@ -344,8 +350,14 @@ class PPO():
         for epoch in range(1, self.args.num_epoch + 1):
             last_epoch_final_obs = obs if epoch > 1 else None
             last_epoch_final_term = term if epoch > 1 else None
-            obs, term = collect_trajectories(
-                epoch, last_epoch_final_obs, last_epoch_final_term)
+            obs, term, epi_rtns, epi_lens = collect_trajectories(epoch, last_epoch_final_obs, last_epoch_final_term)
+            epoch_rtn = sum(epi_rtns) / len(epi_rtns) if len(epi_rtns) > 0 else epoch_rtns[-1]
+            epoch_epi_len = sum(epi_lens) / len(epi_lens) if len(epi_lens) > 0 else epoch_epi_lens[-1]
+
+            epi_rtns_all.extend(epi_rtns)
+            epi_lens_all.extend(epi_lens)
+            epoch_rtns.append(epoch_rtn)
+            epoch_epi_lens.append(epoch_epi_len)
 
             update(optimiser)
 
@@ -358,25 +370,43 @@ class PPO():
         # close the envs after training
         self.envs.close()
 
-        return epoch_avg_rtns
-        # plotting
-        # plt.plot(epoch_avg_rtns)
-        # plt.xlabel("Epoch")
-        # plt.ylabel("Average Episode Return")
-        # plt.show()
+        return epi_rtns_all, epi_lens_all, epoch_rtns, epoch_epi_lens
 
 
 if __name__ == "__main__":
     args = parse_args()
     print(args)
 
-    agent_returns = []
+    epi_rtns, epi_lens, epoch_rtns, epoch_epi_lens = [], [], [], []
 
-    for _ in range(4):
+    for _ in range(args.num_agent):
         algo = PPO(args)
-        agent_returns.append(algo.train())
+        _epi_rtn, _epi_len, _epoch_rtn, _epoch_len = algo.train()
+        epi_rtns.append(_epi_rtn)
+        epi_lens.append(_epi_len)
+        epoch_rtns.append(_epoch_rtn)
+        epoch_epi_lens.append(_epoch_len)
 
-    plt.plot(np.array(agent_returns).mean(axis=0))
-    plt.xlabel("Epoch")
-    plt.ylabel("Average Episode Return")
+    # calculate min and discard extra episodes
+    max_episode_count = max(map(len, epi_rtns))
+    min_episode_count = min(map(len, epi_rtns))
+    print("max_episode_count", max_episode_count)
+    print("min_episode_count", min_episode_count)
+    epi_rtns = [epi_rtn[:min_episode_count] for epi_rtn in epi_rtns]
+    epi_lens = [epi_len[:min_episode_count] for epi_len in epi_lens]
+
+    epi_rtns, epi_lens, epoch_rtns, epoch_epi_lens, = np.array(epi_rtns), np.array(epi_lens), np.array(epoch_rtns), np.array(epoch_epi_lens)
+    data_store = {
+        "epi_rtns": epi_rtns,
+        "epi_lens": epi_lens,
+        "epoch_rtns": epoch_rtns,
+        "epoch_epi_lens": epoch_epi_lens
+    }
+
+    export_data_to_csv(**data_store)
+
+    # plotting
+    plt.plot(np.array(epi_rtns).mean(axis=0))
+    plt.xlabel("Episodes")
+    plt.ylabel("Reward")
     plt.show()
