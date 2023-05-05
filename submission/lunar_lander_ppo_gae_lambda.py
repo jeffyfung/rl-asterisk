@@ -23,7 +23,8 @@ from torch.optim.lr_scheduler import LinearLR
 
 def parse_args():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--exp-name", type=str, default=path.basename(__file__).rstrip(".py"))
+    parser.add_argument("--exp-name", type=str,
+                        default=path.basename(__file__).rstrip(".py"))
     parser.add_argument("--env-id", type=str, default="LunarLander-v2")
     parser.add_argument("--lr", type=float, default=0.005)
     parser.add_argument("--seed", type=int, default=2)
@@ -37,7 +38,6 @@ def parse_args():
     parser.add_argument("--num-steps", type=int, default=1024,
                         help="number of steps to step for each parallel env in a rollout")
 
-    parser.add_argument("--anneal-lr", type=int, default=1)
     parser.add_argument("--gae-lambda", type=float, default=0.95)
     parser.add_argument("--gamma", type=float, default=0.99)
     parser.add_argument("--num_minibatches", type=int, default=4)
@@ -77,8 +77,6 @@ def make_env(env_id, run_name, idx, record_video):
 
 
 def export_data_to_csv(**kwargs):
-    print("here")
-    print(kwargs)
     for key, value in kwargs.items():
         np.save(f"data/{key}.npy", value)
 
@@ -242,7 +240,8 @@ class PPO():
             epi_rtns, epi_lens = [], []
 
             if epoch == 1:
-                obs, _ = self.envs.reset()  # pass in seed=self.args.seed to make the envs deterministic
+                # pass in seed=self.args.seed to make the envs deterministic
+                obs, _ = self.envs.reset()
                 obs = torch.tensor(obs).to(self.device)
                 term = torch.zeros(self.args.num_envs).to(self.device)
 
@@ -269,20 +268,23 @@ class PPO():
                 self.buffer.put(step, **store)
 
                 obs = torch.tensor(obs_prime).to(self.device)
-                term = torch.tensor(np.logical_or(term_prime, trun), dtype=torch.float32).to(self.device)
+                term = torch.tensor(np.logical_or(
+                    term_prime, trun), dtype=torch.float32).to(self.device)
 
                 # record the return and episode length
                 if "final_info" in info:
                     for item in info["final_info"]:
                         if item and "episode" in item:
-                            print(f"epoch={epoch}, global_step={global_step}, episodic_return={item['episode']['r'].item()}")
+                            print(
+                                f"epoch={epoch}, global_step={global_step}, episodic_return={item['episode']['r'].item()}")
                             epi_rtns.append(item['episode']['r'].item())
                             epi_lens.append(item['episode']['l'].item())
 
             # bootstrap the value of the last state of episodes that are not done
             with torch.no_grad():
                 bootstrapped_final_val = self.agent.evaluate_critic(obs)
-            self.buffer.compute_adv_and_rtn(self.args.gamma, self.args.gae_lambda, bootstrapped_final_val, term)
+            self.buffer.compute_adv_and_rtn(
+                self.args.gamma, self.args.gae_lambda, bootstrapped_final_val, term)
 
             return obs, term, epi_rtns, epi_lens
 
@@ -314,26 +316,32 @@ class PPO():
                     # advantage normalisation at minibatch level
                     minibatch_adv = batch_adv[minibatch_ind]
                     # adding a small constant to prevent zero division
-                    minibatch_adv = (minibatch_adv - minibatch_adv.mean()) / (minibatch_adv.std() + 1e-8)
+                    minibatch_adv = (
+                        minibatch_adv - minibatch_adv.mean()) / (minibatch_adv.std() + 1e-8)
 
                     # compute policy loss, negated for gradient ascent
                     pg_loss1 = -minibatch_adv * ratio
-                    pg_loss2 = -minibatch_adv * torch.clamp(ratio, 1 - self.args.clip_coef, 1 + self.args.clip_coef)
+                    pg_loss2 = -minibatch_adv * \
+                        torch.clamp(ratio, 1 - self.args.clip_coef,
+                                    1 + self.args.clip_coef)
                     pg_loss = torch.max(pg_loss1, pg_loss2).mean()
 
                     # compute value loss
                     # value loss clipping is not used since it does not improve performance
-                    v_loss = nn.HuberLoss()(pred_val.view(-1), batch_rtn[minibatch_ind])
+                    v_loss = nn.HuberLoss()(
+                        pred_val.view(-1), batch_rtn[minibatch_ind])
 
                     entropy_loss = entropy.mean()
-                    overall_loss = pg_loss - self.args.ent_coef * entropy_loss + v_loss * self.args.vf_coef
+                    overall_loss = pg_loss - self.args.ent_coef * \
+                        entropy_loss + v_loss * self.args.vf_coef
 
                     optimiser.zero_grad()
                     overall_loss.backward()
 
                     # rescale the policy gradient right before update
                     # ref: https://openreview.net/forum?id=nIAxjsniDzg
-                    nn.utils.clip_grad_norm_(self.agent.parameters(), self.args.max_grad_norm)
+                    nn.utils.clip_grad_norm_(
+                        self.agent.parameters(), self.args.max_grad_norm)
                     optimiser.step()
 
                 # early stopping technique based on KL-divergence introduced by OpenAI
@@ -352,9 +360,12 @@ class PPO():
         for epoch in range(1, self.args.num_epoch + 1):
             last_epoch_final_obs = obs if epoch > 1 else None
             last_epoch_final_term = term if epoch > 1 else None
-            obs, term, epi_rtns, epi_lens = collect_trajectories(epoch, last_epoch_final_obs, last_epoch_final_term)
-            epoch_rtn = sum(epi_rtns) / len(epi_rtns) if len(epi_rtns) > 0 else epoch_rtns[-1]
-            epoch_epi_len = sum(epi_lens) / len(epi_lens) if len(epi_lens) > 0 else epoch_epi_lens[-1]
+            obs, term, epi_rtns, epi_lens = collect_trajectories(
+                epoch, last_epoch_final_obs, last_epoch_final_term)
+            epoch_rtn = sum(
+                epi_rtns) / len(epi_rtns) if len(epi_rtns) > 0 else epoch_rtns[-1]
+            epoch_epi_len = sum(
+                epi_lens) / len(epi_lens) if len(epi_lens) > 0 else epoch_epi_lens[-1]
 
             epi_rtns_all.extend(epi_rtns)
             epi_lens_all.extend(epi_lens)
@@ -418,7 +429,8 @@ if __name__ == "__main__":
         epi_rtns = [epi_rtn[:min_episode_count] for epi_rtn in epi_rtns]
         epi_lens = [epi_len[:min_episode_count] for epi_len in epi_lens]
 
-        epi_rtns, epi_lens, epoch_rtns, epoch_epi_lens, = np.array(epi_rtns), np.array(epi_lens), np.array(epoch_rtns), np.array(epoch_epi_lens)
+        epi_rtns, epi_lens, epoch_rtns, epoch_epi_lens, = np.array(epi_rtns), np.array(
+            epi_lens), np.array(epoch_rtns), np.array(epoch_epi_lens)
         data_store = {
             "epi_rtns": epi_rtns,
             "epi_lens": epi_lens,
