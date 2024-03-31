@@ -4,7 +4,7 @@ Asterix is the name of an Atari 2600 game released in 1983, based on the comic b
 
 Asterix is also one of the Atari games that have been used as a benchmark for reinforcement learning algorithms. Reinforcement learning is a type of machine learning that involves learning from rewards and punishments. The goal is to train an agent to maximize its cumulative reward by interacting with an environment. Atari games provide a challenging and diverse environment for reinforcement learning, as they require high-dimensional sensory input, complex control policies, and long-term planning. ²
 
-In this repository, we use PPO to build an RL agent to achieve high scores in the game. Some of the other reinforcement learning algorithms that have been applied to Asterix and other Atari games are:
+In this repository, we use DQNs and PPO to build an RL agent to achieve high scores in the game. Some of the other reinforcement learning algorithms that have been applied to Asterix and other Atari games are:
 
 - DQN: A deep Q-network that uses a convolutional neural network to learn a value function from raw pixels. DQN was the first algorithm to successfully learn control policies directly from high-dimensional sensory input using reinforcement learning. ³
 - A3C: An asynchronous advantage actor-critic algorithm that uses multiple parallel workers to explore different parts of the environment and update a shared neural network. A3C combines the advantages of policy gradient methods and value-based methods, and achieves better performance than DQN on many Atari games. ⁴
